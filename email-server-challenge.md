@@ -206,80 +206,150 @@ This 30-minute challenge will test your ability to set up a functional email ser
 4. Implement DKIM signing for outgoing emails
 5. Set up a simple anti-spam solution
 
-## Troubleshooting Guide
+## Detailed Troubleshooting for Bounced Emails
 
-### Common Issues:
+If your test emails are still bouncing back, follow this systematic approach to diagnose and fix the issue:
 
-#### Postfix Not Starting
-- Check configuration syntax: `sudo postfix check`
-- Verify log files: `sudo tail -f /var/log/mail.log`
-- Check file permissions for main.cf and master.cf
+### 1. Understand the Exact Bounce Reason
 
-#### Dovecot Not Starting
-- Verify configuration syntax: `sudo dovecot -n`
-- Check log files: `sudo tail -f /var/log/mail.log`
-- Examine process list: `ps aux | grep dovecot`
-- Try starting manually with debug: `sudo dovecot -F`
+First, identify the specific reason for the bounce:
 
-#### Mail Delivery Failures & Bounces
-- Check mail logs: `sudo tail -f /var/log/mail.log`
-- Verify mail queue: `sudo mailq`
-- Look for bounce messages and their causes in logs:
-  ```bash
-  grep "status=bounced" /var/log/mail.log
-  ```
+```bash
+grep "status=bounced" /var/log/mail.log
+```
 
-- Common causes and fixes for bounced mail:
-  1. **User doesn't exist**: 
-     - Verify user exists: `getent passwd testuser`
-     - Create missing user: `sudo adduser testuser`
-  
-  2. **Mailbox directory issues**:
-     - Create Maildir structure: 
-       ```bash
-       sudo mkdir -p /home/testuser/Maildir/{new,cur,tmp}
-       sudo chown -R testuser:testuser /home/testuser/Maildir
-       sudo chmod -R 700 /home/testuser/Maildir
-       ```
-  
-  3. **Permission problems**:
-     - Fix permissions on mail directories:
-       ```bash
-       sudo chown -R testuser:testuser /home/testuser/Maildir
-       sudo chmod -R 700 /home/testuser/Maildir
-       ```
-  
-  4. **Dovecot LMTP not running**:
-     - Check LMTP service: `sudo ss -lnpt | grep dovecot`
-     - Verify service configuration: `grep -r "lmtp" /etc/dovecot/conf.d/`
-     - Restart Dovecot: `sudo systemctl restart dovecot`
-  
-  5. **Postfix not using LMTP**:
-     - Verify configuration: `postconf mailbox_transport`
-     - Set correctly if needed: 
-       ```bash
-       sudo postconf -e "mailbox_transport = lmtp:unix:private/dovecot-lmtp"
-       sudo systemctl restart postfix
-       ```
+Look for the DSN (Delivery Status Notification) code and message, such as:
+- `dsn=5.1.1, status=bounced (user unknown)`
+- `dsn=5.2.0, status=bounced (mailbox unavailable)`
+- `dsn=5.3.0, status=bounced (other mail system problem)`
 
-- Test mail flow with telnet:
-  ```
-  telnet localhost 25
-  EHLO localhost
-  MAIL FROM:<testuser@localhost>
-  RCPT TO:<testuser@localhost>
-  DATA
-  Subject: Test Mail
-  
-  This is a test.
-  .
-  QUIT
-  ```
+### 2. Check Mail Delivery Agent Settings
 
-#### Authentication Issues
-- Verify user exists: `getent passwd testuser`
-- Check Dovecot auth settings: `grep -r auth_mechanisms /etc/dovecot/`
-- Test authentication mechanisms: `doveadm auth test testuser yourpassword`
+Verify that Postfix is properly configured to use Dovecot's LMTP:
+
+```bash
+sudo postconf -n | grep transport
+```
+
+Ensure that the following settings are correct:
+```
+mailbox_transport = lmtp:unix:private/dovecot-lmtp
+```
+
+If missing or incorrect, set it:
+```bash
+sudo postconf -e "mailbox_transport = lmtp:unix:private/dovecot-lmtp"
+sudo systemctl restart postfix
+```
+
+### 3. Verify LMTP Socket Existence and Permissions
+
+Check if the LMTP socket exists and has correct permissions:
+
+```bash
+ls -la /var/spool/postfix/private/dovecot-lmtp
+```
+
+You should see something like:
+```
+srw-rw---- 1 postfix postfix 0 Mar 28 12:34 /var/spool/postfix/private/dovecot-lmtp
+```
+
+If missing, verify Dovecot LMTP configuration:
+```bash
+sudo cat /etc/dovecot/conf.d/10-master.conf | grep -A 10 "service lmtp"
+```
+
+### 4. Check Local User and Mailbox Configuration
+
+Verify the user exists and test mail delivery directly:
+
+```bash
+# Check if user exists
+id testuser
+
+# Test delivery with Dovecot's deliver command
+sudo -u testuser doveadm deliver -d testuser@localhost
+```
+
+### 5. Debug Dovecot LMTP
+
+Enable verbose logging for Dovecot LMTP:
+
+```bash
+sudo nano /etc/dovecot/conf.d/10-logging.conf
+```
+
+Add or modify these lines:
+```
+mail_debug = yes
+verbose_ssl = yes
+auth_verbose = yes
+auth_debug = yes
+```
+
+Restart Dovecot and check logs:
+```bash
+sudo systemctl restart dovecot
+sudo tail -f /var/log/mail.log
+```
+
+### 6. Test Dovecot LMTP Connection Directly
+
+Test the LMTP service directly from command line:
+
+```bash
+telnet localhost 24
+```
+
+If not using TCP, you can test with netcat:
+```bash
+echo -e "LHLO localhost\nQUIT\n" | nc -U /var/spool/postfix/private/dovecot-lmtp
+```
+
+### 7. Check Local Mail Aliases
+
+Verify that there are no conflicting aliases:
+
+```bash
+sudo postconf -n | grep alias
+sudo cat /etc/aliases
+```
+
+### 8. Verify Mail Directory Structure
+
+Create Maildir structure if missing:
+
+```bash
+sudo -u testuser mkdir -p /home/testuser/Maildir/{new,cur,tmp}
+sudo -u testuser chmod -R 700 /home/testuser/Maildir
+sudo -u testuser touch /home/testuser/Maildir/subscriptions
+```
+
+### 9. Test Local Mail Command Directly
+
+Try sending mail directly with mailx:
+
+```bash
+echo "Test message body" | mailx -s "Test subject" testuser@localhost
+```
+
+### 10. Reset and Create a Clean User for Testing
+
+Sometimes, creating a fresh user can help isolate issues:
+
+```bash
+sudo adduser testuser2
+sudo -u testuser2 mkdir -p /home/testuser2/Maildir/{new,cur,tmp}
+sudo -u testuser2 chmod -R 700 /home/testuser2/Maildir
+echo "Test message for new user" | mailx -s "Test for clean user" testuser2@localhost
+```
+
+After making any changes, always restart the relevant services:
+
+```bash
+sudo systemctl restart postfix dovecot
+```
 
 ## Evaluation Criteria
 
