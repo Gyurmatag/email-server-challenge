@@ -171,9 +171,14 @@ This 30-minute challenge will test your ability to set up a functional email ser
    echo "This is a test email" | mail -s "Test Email" testuser@localhost
    ```
 
-4. Check mail logs for delivery status:
+4. Check mail logs for successful delivery:
    ```bash
    sudo tail -f /var/log/mail.log
+   ```
+   
+   Look for messages indicating successful delivery such as:
+   ```
+   postfix/lmtp[1234]: 5678ABCDEF: to=<testuser@localhost>, relay=none, delay=0.08, delays=0.05/0.01/0.00/0.02, dsn=2.0.0, status=sent (250 2.0.0 <testuser@localhost> deliveredToMailbox)
    ```
 
 5. Verify that the mail was delivered:
@@ -216,9 +221,47 @@ This 30-minute challenge will test your ability to set up a functional email ser
 - Examine process list: `ps aux | grep dovecot`
 - Try starting manually with debug: `sudo dovecot -F`
 
-#### Mail Delivery Failures
+#### Mail Delivery Failures & Bounces
 - Check mail logs: `sudo tail -f /var/log/mail.log`
 - Verify mail queue: `sudo mailq`
+- Look for bounce messages and their causes in logs:
+  ```bash
+  grep "status=bounced" /var/log/mail.log
+  ```
+
+- Common causes and fixes for bounced mail:
+  1. **User doesn't exist**: 
+     - Verify user exists: `getent passwd testuser`
+     - Create missing user: `sudo adduser testuser`
+  
+  2. **Mailbox directory issues**:
+     - Create Maildir structure: 
+       ```bash
+       sudo mkdir -p /home/testuser/Maildir/{new,cur,tmp}
+       sudo chown -R testuser:testuser /home/testuser/Maildir
+       sudo chmod -R 700 /home/testuser/Maildir
+       ```
+  
+  3. **Permission problems**:
+     - Fix permissions on mail directories:
+       ```bash
+       sudo chown -R testuser:testuser /home/testuser/Maildir
+       sudo chmod -R 700 /home/testuser/Maildir
+       ```
+  
+  4. **Dovecot LMTP not running**:
+     - Check LMTP service: `sudo ss -lnpt | grep dovecot`
+     - Verify service configuration: `grep -r "lmtp" /etc/dovecot/conf.d/`
+     - Restart Dovecot: `sudo systemctl restart dovecot`
+  
+  5. **Postfix not using LMTP**:
+     - Verify configuration: `postconf mailbox_transport`
+     - Set correctly if needed: 
+       ```bash
+       sudo postconf -e "mailbox_transport = lmtp:unix:private/dovecot-lmtp"
+       sudo systemctl restart postfix
+       ```
+
 - Test mail flow with telnet:
   ```
   telnet localhost 25
